@@ -150,15 +150,6 @@ The CI/CD pipeline automates:
 4. Model validation and deployment
 5. API deployment with traffic management
 
-## Documentation
-
-Additional documentation:
-
-- [Cloud Strategy](docs/CLOUD_STRATEGY.md)
-- [API Reference](docs/API_REFERENCE.md)
-- [Deployment Guide](docs/DEPLOYMENT.md)
-- [Monitoring Guide](docs/MONITORING.md)
-- [Security Overview](docs/SECURITY.md)
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
