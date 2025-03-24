@@ -1,0 +1,33 @@
+{
+  "cloud": {
+    "provider": "gcp",
+    "project_id": "",
+    "region": "us-central1",
+    "credentials_path": null,
+    "gcp": {
+      "artifact_registry": "us-central1-docker.pkg.dev",
+      "repository": "ml-repository"
+    },
+    "aws": {
+      "account_id": null,
+      "role_name": null,
+      "ecr_repository": null,
+      "region": "us-east-1"
+    }
+  },
+  "ml": {
+    "experiment_name": "ml-model-training",
+    "model_name": "ml-model",
+    "deploy_threshold": 0.7,
+    "batch_size": 32,
+    "epochs": 10,
+    "learning_rate": 0.001
+  },
+  "app": {
+    "service_name": "ml-service-api",
+    "service_port": 8080,
+    "service_timeout": 3600,
+    "service_memory": "2048M",
+    "log_level": "INFO"
+  }
+}
