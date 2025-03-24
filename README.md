@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Coverage](https://img.shields.io/badge/coverage-87%25-yellow)
 
-A production-grade MLOps platform for deploying, serving, and monitoring machine learning models at scale. The platform supports multi-cloud deployment (GCP/AWS), automated CI/CD, comprehensive monitoring, and enterprise-grade security features.
+A MLOps platform for deploying, serving, and monitoring machine learning models at scale. The platform supports multi-cloud deployment (GCP/AWS), automated CI/CD, comprehensive monitoring, and enterprise-grade security features.
 
 ## Features
 
