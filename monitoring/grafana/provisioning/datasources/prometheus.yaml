@@ -1,0 +1,12 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'mlops-api'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['mlops-api:8000']  # Replace with your API service endpoint (e.g., service name in Kubernetes)
+  - job_name: 'data-pipeline'
+    static_configs:
+      - targets: ['data-pipeline:8000']  # Replace with your data pipeline service endpoint (e.g., service name in Kubernetes)

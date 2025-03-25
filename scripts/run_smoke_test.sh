@@ -1,0 +1,1 @@
+python run_smoke_tests.py --environment production

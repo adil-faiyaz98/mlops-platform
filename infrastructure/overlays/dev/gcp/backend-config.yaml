@@ -1,0 +1,8 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: ml-api-backend-config
+spec:
+  timeoutSec: 60  # Override with a longer timeout for dev
+  logging:
+    sampleRate: 0.1  # Reduce logging in dev

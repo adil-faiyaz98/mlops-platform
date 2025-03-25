@@ -1,0 +1,17 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: mlops-api-network-delay
+spec:
+  action: delay
+  mode: one
+  selector:
+    namespaces:
+      - mlops
+    labelSelectors:
+      app: mlops-api
+  delay:
+    latency: "200ms"
+    correlation: "25"
+    jitter: "50ms"
+  duration: "60s"

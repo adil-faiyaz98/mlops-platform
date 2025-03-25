@@ -1,0 +1,223 @@
+name: MLOps Platform CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 0 * * 0" # Weekly security scan
+
+jobs:
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black flake8 isort mypy bandit safety
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Format check with black
+        run: black --check api/
+      - name: Import sorting with isort
+        run: isort --check-only --profile black api/
+      - name: Lint with flake8
+        run: flake8 api/ --count --select=E9,F63,F7,F82 --show-source
+      - name: Type check with mypy
+        run: mypy api/
+      - name: Security check with bandit
+        run: bandit -r api/ -ll
+      - name: Dependency vulnerability check
+        run: safety check
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: "trivy-results.sarif"
+      - name: Run SAST scan with SonarCloud
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        ports: ["6379:6379"]
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Run unit tests
+        run: pytest api/tests/unit --cov=api --cov-report=xml
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: true
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        ports: ["6379:6379"]
+      localstack:
+        image: localstack/localstack
+        env:
+          SERVICES: s3,dynamodb,secretsmanager
+        ports: ["4566:4566"]
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run integration tests
+        run: pytest api/tests/integration --cov=api --cov-append --cov-report=xml
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+
+  performance-tests:
+    name: Performance Tests
+    needs: [unit-tests, integration-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up k6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/v0.42.0/k6-v0.42.0-linux-amd64.tar.gz | tar -xz
+          sudo cp k6-v0.42.0-linux-amd64/k6 /usr/local/bin/k6
+      - name: Run performance tests
+        run: k6 run api/tests/performance/k6_tests.js --out json=results.json
+      - name: Verify performance SLAs
+        run: |
+          python -c "
+          import json
+          with open('results.json') as f:
+              data = json.load(f)
+          p95 = data['metrics']['http_req_duration']['values']['p(95)']
+          assert p95 < 500, f'P95 response time {p95}ms exceeds 500ms SLA'
+          error_rate = data['metrics']['http_req_failed']['values']['rate'] * 100
+          assert error_rate < 1, f'Error rate {error_rate}% exceeds 1% SLA'
+          "
+
+  chaos-tests:
+    name: Chaos Engineering Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [integration-tests]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Kubernetes
+        uses: azure/setup-kubectl@v3
+      - name: Install Chaos Mesh
+        run: |
+          helm repo add chaos-mesh https://charts.chaos-mesh.org
+          helm install chaos-mesh chaos-mesh/chaos-mesh --namespace=chaos-testing --create-namespace
+      - name: Run chaos experiments
+        run: |
+          kubectl apply -f api/tests/chaos/network_delay.yaml
+          kubectl apply -f api/tests/chaos/pod_failure.yaml
+          sleep 60  # Wait for experiments to run
+      - name: Verify resilience
+        run: |
+          python api/tests/chaos/verify_resilience.py
+
+  build-and-push:
+    name: Build Docker Image
+    needs: [code-quality, unit-tests, integration-tests]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.REGISTRY }}/mlops-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-dev:
+    name: Deploy to Development
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Kubectl
+        uses: azure/setup-kubectl@v3
+      - name: Set Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_DEV }}
+      - name: Deploy to dev
+        run: |
+          kustomize build infrastructure/overlays/development | kubectl apply -f -
+          kubectl set image deployment/mlops-api mlops-api=${{ secrets.REGISTRY }}/mlops-api:${{ github.sha }} -n mlops
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/mlops-api -n mlops --timeout=300s
+
+  deploy-prod:
+    name: Deploy to Production
+    needs: [build-and-push, performance-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v3
+      - name: Deploy to production (Blue/Green)
+        run: |
+          # Blue-Green deployment
+          kustomize build infrastructure/overlays/production | kubectl apply -f -
+          # Deploy new version as green
+          kubectl set image deployment/mlops-api-green mlops-api=${{ secrets.REGISTRY }}/mlops-api:${{ github.sha }} -n mlops
+          kubectl rollout status deployment/mlops-api-green -n mlops --timeout=300s
+          # Run smoke tests against green deployment
+          python api/tests/smoke/test_green_deployment.py
+          # Switch traffic to green
+          kubectl patch service mlops-api -n mlops -p '{"spec":{"selector":{"deployment":"green"}}}'
+          # Verify health of new production deployment
+          curl -f https://api.mlops.example.com/api/v1/health

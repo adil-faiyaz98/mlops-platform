@@ -1,0 +1,11 @@
+groups:
+  - name: data_pipeline_alerts
+    rules:
+      - alert: DataPipelineFailed
+        expr: changes(data_pipeline_completed_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data pipeline has not completed successfully in the last 5 minutes"
+          description: "Data pipeline has not completed successfully in the last 5 minutes, review the output and input settings"

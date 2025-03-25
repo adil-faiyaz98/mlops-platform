@@ -1,0 +1,18 @@
+# Base service configuration (shared for both cloud providers)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-api-service
+spec:
+  selector:
+    app: mlops-api
+  ports:
+    - port: 443
+      targetPort: 8080
+      protocol: TCP
+      name: https
+  type: LoadBalancer
+  sessionAffinity: ClientIP  # Sticky sessions for improved caching
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 600  # 10 minutes session stickiness

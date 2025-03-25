@@ -1,0 +1,10 @@
+apiVersion: 1
+
+providers:
+  - name: 'dashboards'
+    orgId: 1
+    folder: ''
+    type: file
+    disableSecurity: false
+    options:
+      path: /etc/grafana/provisioning/dashboards # Where Grafana looks for dashboards.

@@ -1,0 +1,32 @@
+# Ingress configuration
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mlops-api-ingress
+  annotations:
+    kubernetes.io/ingress.class: "gce"  # Default ingress class
+    networking.gke.io/managed-certificates: "ml-api-cert" # Default cert
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"  # Limit request size
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://allowed-origin.com"
+spec:
+  tls:
+    - hosts:
+        - ml-api.example.com
+      secretName: ml-api-tls
+  rules:
+    - host: ml-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mlops-api-service
+                port:
+                  name: https

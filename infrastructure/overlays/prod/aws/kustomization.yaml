@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../base/load-balancer
+namespace: prod
+
+namePrefix: prod-
+commonAnnotations:
+  environment: prod
+  cloud: aws
+
+patchesStrategicMerge:
+  - service-patch.yaml  # AWS-specific Service settings
+patches:
+  - patch: |-
+      - op: add
+      path: /metadata/labels/priority
+      value: high

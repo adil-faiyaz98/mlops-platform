@@ -1,0 +1,271 @@
+# OpenTelemetry Collector configuration for MLOps platform
+# This configuration collects traces, metrics, and logs from all platform components
+
+receivers:
+  # OTLP receiver for traces, metrics, and logs (gRPC protocol)
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  
+  # Prometheus metrics scraping
+  prometheus:
+    config:
+      scrape_configs:
+      - job_name: 'otel-collector'
+        scrape_interval: 10s
+        static_configs:
+        - targets: ['0.0.0.0:8888']
+      - job_name: 'mlops-api'
+        scrape_interval: 10s
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          regex: mlops-api
+          action: keep
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          target_label: __address__
+          regex: '(.+)'
+          replacement: '$1:${1}'
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+          
+  # Collect Kubernetes events
+  k8s_cluster:
+    collection_interval: 10s
+    node_conditions_to_report:
+      - Ready
+      - MemoryPressure
+      - DiskPressure
+    allocatable_types_to_report:
+      - cpu
+      - memory
+      - storage
+    
+  # Collect host metrics
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.time:
+            enabled: true
+      disk:
+        metrics:
+          system.disk.operations:
+            enabled: true
+          system.disk.io:
+            enabled: true
+      filesystem:
+        metrics:
+          system.filesystem.usage:
+            enabled: true
+          system.filesystem.utilization:
+            enabled: true
+        mount_points:
+          excludes: ["/dev", "/proc", "/sys", "/run"]
+      load:
+        metrics:
+          system.cpu.load_average.1m:
+            enabled: true
+          system.cpu.load_average.5m:
+            enabled: true
+          system.cpu.load_average.15m:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.usage:
+            enabled: true
+          system.memory.utilization:
+            enabled: true
+      network:
+        metrics:
+          system.network.io:
+            enabled: true
+          system.network.packets:
+            enabled: true
+          system.network.errors:
+            enabled: true
+      paging:
+        metrics:
+          system.paging.usage:
+            enabled: true
+
+  # Log collection
+  filelog:
+    include:
+      - /var/log/pods/*/*/*.log
+    exclude:
+      - /var/log/pods/*/kube-system/*.log
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+      - type: add_kubernetes_metadata
+
+processors:
+  # Batch data to improve throughput
+  batch:
+    send_batch_size: 1024
+    timeout: 10s
+    send_batch_max_size: 2048
+    
+  # Filter out unnecessary data
+  filter:
+    metrics:
+      include:
+        match_type: regexp
+        resource_attributes:
+          - key: k8s.pod.name
+            value: "mlops-.*"
+            
+  # Add Kubernetes metadata to telemetry
+  k8s_tagger:
+    extract:
+      metadata:
+        - namespace
+        - node
+        - pod_name
+        - pod_uid
+        - deployment_name
+      annotations:
+        - key: app
+          from: pod
+        - key: version
+          from: pod
+      labels:
+        - key: app
+          from: pod
+        - key: component
+          from: pod
+          
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.namespace
+        value: "mlops-platform"
+        action: upsert
+        
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1000
+    spike_limit_mib: 200
+    
+  # Sample traces in production (keep all traces in lower environments)
+  probabilistic_sampler:
+    hash_seed: 42
+    sampling_percentage: ${env:SAMPLING_PERCENTAGE}
+    
+  # Enrich spans with metadata
+  span:
+    name:
+      to_attributes:
+        rules:
+          - pattern: ^\/api\/v1\/([a-z-]+)\/.*$
+            attribute_key: http.route
+            regex_pattern: "/api/v1/${1}/:operation"
+              
+    # Transform metrics
+    transform:
+      metric_statements:
+        - context: metric
+          statements:
+            - set(description, "MLOps Platform: " + description) where name startswith "mlops."
+  
+  exporters:
+    # Export metrics to Prometheus
+    prometheus:
+      endpoint: "0.0.0.0:8889"
+      namespace: mlops
+      send_timestamps: true
+      metric_expiration: 180m
+      resource_to_telemetry_conversion:
+        enabled: true
+      
+  # Export traces to Jaeger
+  jaeger:
+    endpoint: jaeger-collector:14250
+    tls:
+      insecure: true
+      
+  # Export to Zipkin (alternative tracing backend)
+  zipkin:
+    endpoint: "http://zipkin:9411/api/v2/spans"
+    
+  # Export logs to Elasticsearch
+  elasticsearch:
+    endpoints: ["https://elasticsearch-master:9200"]
+    index: "mlops-logs-%{yyyy.MM.dd}"
+    username: "${env:ELASTICSEARCH_USERNAME}"
+    password: "${env:ELASTICSEARCH_PASSWORD}"
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+      
+  # OTLP export for other OpenTelemetry-compatible backends
+  otlp:
+    endpoint: otel-collector:4317
+    tls:
+      insecure: true
+      
+  # Debug exporter (for development)
+  debug:
+    verbosity: detailed
+
+  # File exporter (for debugging)
+  file:
+    path: /var/log/otel-collector/data.json
+
+extensions:
+  # Health check endpoint
+  health_check:
+    endpoint: 0.0.0.0:13133
+    
+  # Performance profiler
+  pprof:
+    endpoint: 0.0.0.0:1888
+    
+  # Runtime metrics about the collector itself
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    # Traces pipeline
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, k8s_tagger, resource, probabilistic_sampler, span]
+      exporters: [jaeger, zipkin, otlp]
+      
+    # Metrics pipeline
+    metrics:
+      receivers: [otlp, prometheus, hostmetrics, k8s_cluster]
+      processors: [memory_limiter, batch, filter, k8s_tagger, resource, transform]
+      exporters: [prometheus, otlp]
+      
+    # Logs pipeline
+    logs:
+      receivers: [otlp, filelog]
+      processors: [memory_limiter, batch, k8s_tagger, resource]
+      exporters: [elasticsearch, otlp]
+
+    # Debug pipeline (enable in development environments)
+    # traces/debug:
+    #  receivers: [otlp]
+    #  processors: [memory_limiter, batch]
+    #  exporters: [debug, file]

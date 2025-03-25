@@ -1,0 +1,62 @@
+groups:
+- name: mlops_api_alerts
+  rules:
+  - alert: HighRequestLatency
+    expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="mlops-api"}[5m])) by (le, route)) > 0.5
+    for: 5m
+    labels:
+      severity: warning
+      team: mlops
+    annotations:
+      summary: "High request latency on {{ $labels.route }}"
+      description: "P95 latency for {{ $labels.route }} is above 500ms for 5 minutes (current value: {{ $value }}s)"
+
+  - alert: HighErrorRate
+    expr: sum(rate(http_request_errors_total{job="mlops-api"}[5m])) / sum(rate(http_requests_total{job="mlops-api"}[5m])) > 0.05
+    for: 5m
+    labels:
+      severity: critical
+      team: mlops
+    annotations:
+      summary: "High error rate detected"
+      description: "Error rate is above 5% for 5 minutes (current value: {{ $value | humanizePercentage }})"
+
+  - alert: ModelPredictionErrors
+    expr: sum(rate(model_prediction_errors_total{job="mlops-api"}[5m])) > 0.1
+    for: 5m
+    labels:
+      severity: warning
+      team: mlops
+    annotations:
+      summary: "Model prediction errors detected"
+      description: "Model prediction errors are occurring at rate of {{ $value }} errors per second"
+
+  - alert: CircuitBreakerOpen
+    expr: circuit_breaker_state{job="mlops-api"} == 1
+    for: 1m
+    labels:
+      severity: critical
+      team: mlops
+    annotations:
+      summary: "Circuit breaker open for {{ $labels.dependency }}"
+      description: "The circuit breaker for {{ $labels.dependency }} has been open for 1 minute"
+
+  - alert: HighApiKeyRejectionRate
+    expr: sum(rate(api_key_rejections_total{job="mlops-api"}[5m])) > 1
+    for: 5m
+    labels:
+      severity: warning
+      team: security
+    annotations:
+      summary: "High API key rejection rate"
+      description: "API key rejections are occurring at rate of {{ $value }} per second"
+
+  - alert: HighRateLimitHits
+    expr: sum(rate(rate_limit_exceeded_total{job="mlops-api"}[5m])) > 10
+    for: 5m
+    labels:
+      severity: warning
+      team: security
+    annotations:
+      summary: "High rate limiting activity"
+      description: "Rate limits are being hit at {{ $value }} requests per second"
