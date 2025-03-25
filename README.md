@@ -242,7 +242,8 @@ Set the rate_limit_threshold variable.
 Set the rate_limit_paths variable.
 Set the rate_limit_enforce_key variable.
 Run terraform init, terraform plan, and terraform apply.
-AWS WAF:
+
+### AWS WAF:
 
 Set the aws_region variable.
 Set the ip_whitelist variable (if needed).
@@ -250,18 +251,14 @@ Set the rate_limit_threshold variable.
 Set the rate_limit_paths variable.
 Set the rate_limit_enforce_key variable.
 Run terraform init, terraform plan, and terraform apply.
-Monitoring
+
+### Monitoring
 The OpenTelemetry collector is configured to collect traces, metrics, and logs. You can use:
-
-### Monitoring / Observability
-
 Prometheus: For metrics monitoring and alerting.
 
 ### License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-<<<<<<< HEAD
 
 ```bash
 python pipeline.py --input-data-uri gs://your-bucket/processed-data/ --output-dir ./models --deploy-env staging
