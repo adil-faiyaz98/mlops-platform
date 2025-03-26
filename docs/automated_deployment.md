@@ -104,7 +104,24 @@ kubectl describe configmap -n kube-system aws-auth
 
 ## Security Testing
 
-Security testing is a critical part of the MLOps platform deployment process. This section outlines penetration tests that should be performed after deployment to verify security controls.
+Security testing is a critical part of the MLOps platform deployment process. Our automated security testing framework conducts comprehensive penetration tests across all platform components.
+
+### Running the Security Tests
+
+The security tests can be run in multiple ways:
+
+#### 1. As part of CI/CD pipeline
+
+The tests automatically run:
+
+- Weekly on Sunday at 2:00 UTC
+- On PRs to the main branch
+- Manually via GitHub Actions workflow dispatch
+
+```bash
+# To view test results
+open https://github.com/adil-faiyaz98/mlops-platform/actions/workflows/security-testing.yml
+```
 
 ### Penetration Testing Framework
 

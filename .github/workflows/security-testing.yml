@@ -1,0 +1,309 @@
+name: Security Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to test"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+  schedule:
+    - cron: "0 2 * * 0" # Weekly on Sunday at 2:00 UTC
+  pull_request:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "security/**"
+      - "infrastructure/**"
+
+jobs:
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r security/requirements.txt
+
+      - name: Get authentication token
+        id: get_token
+        run: |
+          echo "::add-mask::${{ secrets.SECURITY_TEST_PASSWORD }}"
+          TOKEN=$(python -c "
+          import requests
+          import os
+          import json
+
+          response = requests.post(
+              '${{ secrets.API_BASE_URL_STAGING if env.ENVIRONMENT == 'staging' else secrets.API_BASE_URL_PRODUCTION }}/api/v1/token',
+              data={
+                  'username': '${{ secrets.SECURITY_TEST_USERNAME }}',
+                  'password': '${{ secrets.SECURITY_TEST_PASSWORD }}'
+              },
+              headers={'Content-Type': 'application/x-www-form-urlencoded'}
+          )
+
+          if response.status_code == 200:
+              print(response.json().get('access_token', ''))
+          else:
+              print('')
+          ")
+
+          if [ -z "$TOKEN" ]; then
+            echo "Failed to obtain authentication token"
+            echo "token=" >> $GITHUB_OUTPUT
+          else
+            echo "::add-mask::$TOKEN"
+            echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run security tests
+        id: security_tests
+        run: |
+          python security/tests/penetration_tests.py \
+            --url ${{ secrets.API_BASE_URL_STAGING if env.ENVIRONMENT == 'staging' else secrets.API_BASE_URL_PRODUCTION }} \
+            --token ${{ steps.get_token.outputs.token }} \
+            --output security-report.json
+
+      - name: Check for critical vulnerabilities
+        run: |
+          CRITICAL_VULNS=$(jq '[.vulnerabilities[] | select(.severity == "critical")] | length' security-report.json)
+          HIGH_VULNS=$(jq '[.vulnerabilities[] | select(.severity == "high")] | length' security-report.json)
+
+          echo "Critical vulnerabilities: $CRITICAL_VULNS"
+          echo "High vulnerabilities: $HIGH_VULNS"
+
+          if [ $CRITICAL_VULNS -gt 0 ]; then
+            echo "::error::Found $CRITICAL_VULNS critical security vulnerabilities!"
+            exit 1
+          fi
+
+      - name: Generate security report
+        run: |
+          python -c "
+          import json
+          import markdown
+          import datetime
+
+          # Load the JSON report
+          with open('security-report.json', 'r') as f:
+              report = json.load(f)
+
+          # Generate Markdown report
+          md = f\"\"\"# Security Test Report
+
+          **Environment:** ${{ env.ENVIRONMENT }}  
+          **Date:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
+          **Security Score:** {report['summary']['security_score']}/100  
+          **Risk Level:** {report['summary']['risk_level']}
+
+          ## Summary
+
+          - **Total Tests:** {report['summary']['total_tests']}
+          - **Passed:** {report['summary']['passed']}
+          - **Failed:** {report['summary']['failed']}
+          - **Errors:** {report['summary']['errors']}
+
+          ## Vulnerabilities Found
+
+          | Component | Test | Severity | Details |
+          |-----------|------|----------|---------|
+          \"\"\"
+
+          for vuln in report['vulnerabilities']:
+              details = vuln['details'].get('message', 'No details provided')
+              md += f\"| {vuln['component']} | {vuln['test_name']} | {vuln['severity'].upper()} | {details} |\n\"
+
+          if not report['vulnerabilities']:
+              md += \"| N/A | N/A | N/A | No vulnerabilities found |\n\"
+
+          md += \"\n\n## Recommendations\n\n\"
+
+          if report['vulnerabilities']:
+              md += \"Based on the findings, we recommend addressing the following issues:\n\n\"
+              for vuln in report['vulnerabilities']:
+                  md += f\"1. **{vuln['component']} - {vuln['test_name']}** ({vuln['severity'].upper()}): Implement proper validation and security controls.\n\"
+          else:
+              md += \"No critical issues found. Continue monitoring and periodic testing.\n\"
+
+          # Save the markdown report
+          with open('security-report.md', 'w') as f:
+              f.write(md)
+
+          # Generate HTML for GitHub pages
+          html = markdown.markdown(md, extensions=['tables'])
+
+          html_template = f\"\"\"<!DOCTYPE html>
+          <html>
+          <head>
+              <title>Security Test Report - ${{ env.ENVIRONMENT }}</title>
+              <meta charset=\"UTF-8\">
+              <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+              <style>
+                  body {{ font-family: Arial, sans-serif; line-height: 1.6; margin: 0 auto; max-width: 900px; padding: 20px; }}
+                  h1 {{ color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
+                  table {{ border-collapse: collapse; width: 100%; }}
+                  th, td {{ text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }}
+                  tr:hover {{background-color: #f5f5f5;}}
+                  th {{ background-color: #4CAF50; color: white; }}
+              </style>
+          </head>
+          <body>
+              {html}
+          </body>
+          </html>
+          \"\"\"
+
+          with open('security-report.html', 'w') as f:
+              f.write(html_template)
+          "
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: |
+            security-report.json
+            security-report.md
+            security-report.html
+          retention-days: 90
+
+      - name: Send notification if vulnerabilities found
+        if: steps.security_tests.outputs.vulnerabilities > 0
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SECURITY_WEBHOOK }}
+          SLACK_CHANNEL: security-alerts
+          SLACK_COLOR: danger
+          SLACK_TITLE: Security Vulnerabilities Detected
+          SLACK_MESSAGE: |
+            Security testing found vulnerabilities in ${{ env.ENVIRONMENT }} environment!
+            Score: ${{ steps.security_tests.outputs.score }}/100
+            Risk Level: ${{ steps.security_tests.outputs.risk_level }}
+            Please check the security report for details.
+          SLACK_FOOTER: MLOps Security Pipeline
+
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          load: true
+          tags: mlops-api:latest
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "mlops-api:latest"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: "trivy-results.sarif"
+          category: container-security
+
+  infrastructure-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup TFSec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: infrastructure/terraform/aws
+          output_format: sarif
+          output_file: tfsec-results.sarif
+
+      - name: Upload TFSec scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: tfsec-results.sarif
+          category: infrastructure-security
+
+      - name: Run checkov
+        id: checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infrastructure/
+          framework: terraform
+          output_format: sarif
+          output_file: checkov-results.sarif
+          quiet: true
+          soft_fail: true
+
+      - name: Upload checkov scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: checkov-results.sarif
+          category: infrastructure-checkov
+
+  integration-job:
+    name: Security Integration Report
+    needs: [security-scan, container-scan, infrastructure-scan]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Download all security reports
+        uses: actions/download-artifact@v3
+        with:
+          name: security-reports
+          path: reports
+
+      - name: Generate integrated report
+        run: |
+          echo "# Integrated Security Report" > integrated-report.md
+          echo "\nThis report combines results from all security testing pipelines.\n" >> integrated-report.md
+
+          echo "\n## Application Security Test Results\n" >> integrated-report.md
+          cat reports/security-report.md >> integrated-report.md
+
+          echo "\n## Overall Security Status\n" >> integrated-report.md
+          if [ ${{ needs.security-scan.result }} == 'success' ] && [ ${{ needs.container-scan.result }} == 'success' ] && [ ${{ needs.infrastructure-scan.result }} == 'success' ]; then
+            echo "✅ All security tests passed" >> integrated-report.md
+          else
+            echo "❌ Some security tests failed - see details above" >> integrated-report.md
+          fi
+
+      - name: Publish security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: integrated-security-report
+          path: integrated-report.md
+          retention-days: 90
