@@ -2,6 +2,9 @@
 Main API application with security and documentation enhancements.
 """
 import os
+import time
+import logging
+import uuid
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, status, Request
@@ -11,14 +14,34 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware import Middleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+from pydantic import ValidationError
 
 from api.utils.config import Config
 from api.utils.logging import logger, add_request_context_middleware
 from api.utils.metrics import get_metrics
 from api.cache.enhanced_redis_cache import EnhancedRedisCache
-from api.middleware.rate_limiter import setup_rate_limiting
+from api.middleware.rate_limiter import setup_rate_limiting, RateLimiter, add_rate_limit_headers
 from api.middleware.cache_middleware import setup_cache_middleware
-from api.routers import health, prediction, model, auth
+from api.middleware.security import (
+    SecurityHeadersMiddleware,
+    XSSProtectionMiddleware,
+    SQLInjectionProtectionMiddleware,
+    SecurityConfig,
+    JWTBearerAuth
+)
+from api.utils.error_handler import (
+    api_error_handler,
+    validation_exception_handler,
+    unhandled_exception_handler,
+    APIErrorBase
+)
+from api.routers import health, prediction, model, auth, monitoring
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Initialize metrics
 metrics = get_metrics()
@@ -85,13 +108,65 @@ def create_application() -> FastAPI:
     except Exception as e:
         logger.error(f"Error setting up metrics middleware: {e}", exc_info=True)
 
+    # Add exception handlers
+    app.add_exception_handler(APIErrorBase, api_error_handler)
+    app.add_exception_handler(ValidationError, validation_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
+
+    # Add security middlewares
+    security_config = SecurityConfig()
+    app.add_middleware(SecurityHeadersMiddleware, config=security_config)
+    app.add_middleware(XSSProtectionMiddleware)
+    app.add_middleware(SQLInjectionProtectionMiddleware)
+
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=security_config.CORS_ALLOW_ORIGINS,
+        allow_credentials=security_config.CORS_ALLOW_CREDENTIALS,
+        allow_methods=security_config.CORS_ALLOW_METHODS,
+        allow_headers=security_config.CORS_ALLOW_HEADERS,
+    )
+
+    # Add rate limiting middleware
+    app.middleware("http")(add_rate_limit_headers)
+
+    # Create rate limiter
+    rate_limiter = RateLimiter(
+        anon_limit=int(os.getenv("RATE_LIMIT_ANON", "20")),
+        anon_window=int(os.getenv("RATE_LIMIT_ANON_WINDOW", "60")),
+        auth_limit=int(os.getenv("RATE_LIMIT_AUTH", "100")),
+        auth_window=int(os.getenv("RATE_LIMIT_AUTH_WINDOW", "60")),
+    )
+
+    # Setup authentication
+    auth = JWTBearerAuth(config=security_config)
+
+    # Add request ID middleware
+    @app.middleware("http")
+    async def add_request_id(request: Request, call_next):
+        """Add a unique request ID to each request"""
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        start_time = time.time()
+        
+        response = await call_next(request)
+        
+        # Add request ID and processing time to response headers
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Process-Time"] = str(time.time() - start_time)
+        
+        return response
     
     # Register API routes
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(prediction.router, prefix="/api/v1")
     app.include_router(model.router, prefix="/api/v1")
     app.include_router(auth.router)
-    #app.include_router(monitoring.router, prefix="/api/v1") Removed for this
+    app.include_router(
+        monitoring.router,
+        dependencies=[Depends(auth), Depends(lambda request: rate_limiter.rate_limit_dependency(request, is_authenticated=True))]
+    )
     
     # Add metrics endpoint
     @app.get("/metrics", include_in_schema=False)
@@ -196,6 +271,11 @@ def create_application() -> FastAPI:
 
 # Create FastAPI instance
 app = create_application()
+
+# Root endpoint
+@app.get("/", include_in_schema=False)
+async def root():
+    return {"message": "Welcome to the MLOps Platform API. See /docs for API documentation."}
 
 if __name__ == "__main__":
     import uvicorn
