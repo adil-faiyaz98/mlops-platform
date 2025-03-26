@@ -166,31 +166,31 @@ processors:
     hash_seed: 42
     sampling_percentage: ${env:SAMPLING_PERCENTAGE}
     
-  # Enrich spans with metadata
-  span:
-    name:
-      to_attributes:
-        rules:
-          - pattern: ^\/api\/v1\/([a-z-]+)\/.*$
-            attribute_key: http.route
-            regex_pattern: "/api/v1/${1}/:operation"
-              
-    # Transform metrics
-    transform:
-      metric_statements:
-        - context: metric
-          statements:
-            - set(description, "MLOps Platform: " + description) where name startswith "mlops."
-  
-  exporters:
-    # Export metrics to Prometheus
-    prometheus:
-      endpoint: "0.0.0.0:8889"
-      namespace: mlops
-      send_timestamps: true
-      metric_expiration: 180m
-      resource_to_telemetry_conversion:
-        enabled: true
+    # Enrich spans with metadata
+    span:
+      name:
+        to_attributes:
+          rules:
+            - pattern: ^\/api\/v1\/([a-z-]+)\/.*$
+              attribute_key: http.route
+              regex_pattern: "/api/v1/${1}/:operation"
+    
+        # Transform metrics
+        transform:
+          metric_statements:
+            - context: metric
+              statements:
+                - set(description, "MLOps Platform: " + description) where name startswith mlops"
+    
+    exporters:
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: mlops
+        send_timestamps: true
+        metric_expiration: 180m
+        resource_to_telemetry_conversion:
+          enabled: true
+
       
   # Export traces to Jaeger
   jaeger:
