@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/your-username/sagemaker-end-to-end-deployment.git
+    repoURL: https://github.com/adil-faiyaz98/mlops-platform.git
     targetRevision: develop
     path: deploy/kubernetes/overlays/dev
   destination:
